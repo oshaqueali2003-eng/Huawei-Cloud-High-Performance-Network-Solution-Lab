@@ -1,125 +1,37 @@
 # Huawei-Cloud-High-Performance-Network-Solution-Lab
 Huawei Cloud High-Performance Network Solution Lab  A hands-on lab where I designed a small but realistic cloud network on Huawei Cloud (region: AP-Singapore). A Discuz! forum website acts as the "service system". Around it I built the database, internet access, a private O&amp;M (operations) network, and private DNS.
-Step-by-Step Guide
 
-Region for everything: AP-Singapore. Replace placeholders like <ecs-web-private-ip> with your own values. Never commit real passwords.
+# Huawei Cloud: High-Performance Network Solution Lab
 
-Part 1: Basic environment
-Step 1. Create subnet-db and sg-db
+## 📌 Overview
+This repository contains the complete implementation of a High-Performance Network Solution lab on Huawei Cloud, deployed in the AP-Singapore region. The main objective of this project was to design a secure, scalable, and highly available network architecture from scratch. The environment hosts a Discuz! Forum web application, which is backed by a highly available RDS MySQL database. To ensure strict security and separation of duties, I built an isolated Operations and Maintenance (O&M) network and connected it to the main network using VPC Peering. Secure internet access is managed efficiently through a Public NAT Gateway, and Private DNS is configured for seamless internal name resolution.
 
-Why? The database should live in its own subnet with its own firewall, separate from the web server.
+## 🏗️ Architecture Diagram
+![Architecture Diagram](architecture.png)
+*(Note: The image file should be named `architecture.png` in the root of this repository)*
 
-Console, then Virtual Private Cloud. You will see vpc-primary.
-Subnets, then Create Subnet:
-VPC: vpc-primary
-Name: subnet-db
-IPv4 CIDR Block: 192.168.2.0/24
-Access Control, then Security Groups, then Create Security Group:
-Name: sg-db
-Template: Fast-add rule, inbound MySQL (3306)
-Open sg-db, then Inbound Rules. On the TCP 3306 rule click Modify. Change Source from an IP address to Security group and choose sg-web. Confirm.
+## 🌐 Network Design and CIDR Plan
+The network is logically divided into two separate Virtual Private Clouds (VPCs) to ensure isolation. The primary VPC (`vpc-primary`) uses the CIDR block `192.168.0.0/16` and hosts the main web and database resources. Within this VPC, the web server is placed in `subnet-web` (`192.168.1.0/24`), while the database resides in a completely isolated `subnet-db` (`192.168.2.0/24`). For management purposes, a separate O&M VPC (`vpc-om`) was created using the `172.16.0.0/16` CIDR block, containing `subnet-om` (`172.16.1.0/24`) which hosts the Jump Server. 
 
-Result: only the web server group can reach the database port.
+## 🚦 Key Configurations and Implementations
 
-Step 2. Buy the RDS database
-Relational Database Service, then Buy DB Instance.
-Settings:
-Billing: Pay-per-use
-Region: AP-Singapore
-Engine: MySQL 5.7
-Instance type: Primary/Standby (primary and standby in different AZs)
-Storage: Cloud SSD, 40 GB
-Class: Dedicated, 2 vCPUs / 4 GB
-VPC / subnet: vpc-primary / subnet-db
-Port: 3306
-Security group: sg-db
-Password: choose a strong one and store it safely
-Submit and wait for status Available. Note the floating IP of the database.
-Step 3. Install Discuz! and connect to RDS
-ECS console, copy the EIP of ecs-web.
-Browser: http://<EIP>:80.
-Accept the license. All directory checks must show Can write. Click Next.
-Choose A new installation Discuz! X (Contain UCenter Server).
-Fill in:
-Database server: the RDS floating IP
-Database password: the RDS root password
-Admin password: a password for the forum admin
-Finish. Open http://<EIP>:80 again and log in as admin.
-Part 2: Internet access with EIP and NAT Gateway
-Step 1. Unbind the EIP
+**Database Isolation and Security:** To protect sensitive data, the database is not exposed to the internet. I deployed a Primary/Standby RDS MySQL 5.7 instance across different Availability Zones for high availability. A dedicated Security Group (`sg-db`) was configured to allow MySQL traffic (Port 3306) strictly from the web server's Security Group (`sg-web`), ensuring no unauthorized access.
 
-ECS console, then ecs-web, then More, Manage Network, Unbind EIP. Reload the site. It should now fail, which proves the server has no internet path.
+**Secure Internet Access via NAT Gateway:** Initially, the EIP was unbound from the web server to prove internet isolation. To provide secure outbound internet access for updates, I deployed a Public NAT Gateway. I configured a SNAT rule to allow instances in the web subnet to access the internet. Additionally, a DNAT rule was created to map the NAT Gateway's public IP (Port 80) to the private IP of the web server (Port 80), allowing external users to access the Discuz! forum without directly exposing the server.
 
-Step 2. Create the NAT Gateway
+**VPC Peering and Cross-Network Routing:** To allow the O&M team to manage the primary network, I established a VPC Peering connection between `vpc-primary` and `vpc-om`. I carefully updated the Route Tables in both VPCs to ensure bidirectional traffic flow. Furthermore, I modified the `sg-web` inbound rules to allow ICMP and SSH traffic originating only from the O&M security group (`sg-om`).
 
-NAT Gateway, then Buy Public NAT Gateway:
+**Private DNS Design:** To simplify internal management, I configured a Private DNS Zone for `abc.com` within `vpc-om`. I created an A-record mapping `www.abc.com` to the private IP of the web server (`192.168.1.10`). This allows administrators to securely access services using easy-to-remember domain names instead of complex IP addresses.
 
-Name: nat-web
-VPC: vpc-primary, Subnet: subnet-web
-Billing: Pay-per-use
-Step 3. Add the SNAT rule (outbound)
-Scenario: VPC
-CIDR: existing, subnet-web (192.168.1.0/24)
-Public IP: the EIP you just unbound
-Step 4. Add the DNAT rule (inbound)
-Scenario: VPC / Server, instance ecs-web
-Public IP: the same EIP
-Outside port: 80, Inside port: 80, Protocol: TCP
-Step 5. Test
+## 🧪 Connectivity Tests (Evidence)
+To validate the architecture, several connectivity tests were performed. From the Jump Server (`ecs-om`), I successfully pinged the private IP of the web server, confirming that VPC Peering and routing were working perfectly. I also pinged `www.abc.com` from the Jump Server, which successfully resolved to the correct private IP, proving the Private DNS configuration was accurate. Finally, the Discuz! forum was accessed via a web browser using the NAT Gateway's Public IP, which confirmed that the DNAT rules and database connections were functioning flawlessly.
 
-Reload http://<EIP>. The Discuz! home page should load again, now through the NAT Gateway.
+## 🧹 Cleanup Steps
+After completing the lab and capturing the necessary evidence, all resources were properly cleaned up to avoid unnecessary billing. This included deleting the Discuz! application, releasing the EIP, deleting the Public NAT Gateway, removing the VPC Peering connection, and deleting the Private DNS Zone. Finally, the ECS instances and RDS database were terminated, followed by the deletion of Security Groups and VPCs.
 
-Part 3: VPC peering between vpc-primary and vpc-om
-Step 1. Create the ops network
-Create VPC: name vpc-om, CIDR 172.16.0.0/16, default subnet subnet-om with 172.16.1.0/24.
-Create security group sg-om with the General-purpose web server template.
-Step 2. Create the jump server
 
-Buy ECS:
 
-Spec: s6.large.2
-Image: CentOS 7.6 64-bit
-Network: vpc-om / subnet-om
-Security group: sg-om
-EIP: not required (we log in through the console)
-Name: ecs-om
-Login: password
-Step 3. Create the peering connection
 
-VPC Peering Connections, then Create:
 
-Local VPC: vpc-primary
-Account: My account
-Peer project: ap-southeast-3
-Peer VPC: vpc-om
 
-Click Add Now to add routes:
 
-Route table	Destination	Next hop
-vpc-primary	vpc-om CIDR (172.16.0.0/16)	the peering connection
-vpc-om	vpc-primary CIDR (192.168.0.0/16)	the peering connection
-Step 4. Verify connectivity
-Open sg-web, then Inbound Rules, Add Rule: Protocol ALL, Source Security group sg-om.
-Note the private IP of ecs-web.
-Remote Login to ecs-om (Other Login Modes, user root).
-Run:
-bash
-ping -c 3 <ecs-web-private-ip>
-
-Expected: 3 replies, 0% packet loss.
-
-Part 4: DNS design
-
-Why? Admins should not memorize IPs. A name is easier.
-
-Step 1. Create the private zone
-Domain Name Service, then Private Zones, then Create Private Zone.
-Domain name: www.abc.com, VPC: vpc-om.
-Manage Record Sets, then Add Record Set:
-Type: A
-TTL: default
-Value: private IP of ecs-web
-Name: leave blank (so the record is for www.abc.com itself)
-Step 2. Verify from ecs-om
-bash
-ping -c 3 www.abc.com
